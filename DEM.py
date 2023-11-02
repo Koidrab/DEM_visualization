@@ -180,7 +180,7 @@ xml_img_path = "path of xml file of the image metadata"
 
 dem_res = 30 #XML_getResolution(xml_dem_path, isDEM=True) 
 img_res = XML_getResolution(xml_img_path)
-res_thresh = 5  # soglia di risoluzione massima: se sotto la soglia, l'immagine verrà ricampionata al valore di soglia (espressa in metri/pixel)
+res_thresh = 10  # soglia di risoluzione massima: se sotto la soglia, l'immagine verrà ricampionata al valore di soglia (espressa in metri/pixel)
 
 img_coo = XML_getCoordinates(xml_img_path)
 

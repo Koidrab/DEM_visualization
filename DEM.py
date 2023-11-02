@@ -1,6 +1,7 @@
 import numpy as np
 import cv2 as cv 
 import tifffile as tif
+import xml.etree.ElementTree as ET
 import math 
 import mayavi.mlab as mlb
 from tvtk.api import tvtk
@@ -8,8 +9,78 @@ import vtk
 from vtkmodules.util.numpy_support import numpy_to_vtk
 import matplotlib.pyplot as plt
 
-def coordinates(tiff):
-    return (tiff.geotiff_metadata.get("ModelTiepoint")[4], tiff.geotiff_metadata.get("ModelTiepoint")[3])
+def geotiff_getCoordinates(tiff, res, x, y):
+    x = x*res
+    y = y*res
+    r = 6371000
+    
+    NW_lat = tiff.geotiff_metadata.get("ModelTiepoint")[4]
+    NW_lon = tiff.geotiff_metadata.get("ModelTiepoint")[3]
+
+    lat_rad = math.radians(NW_lat)
+    lon_rad = math.radians(NW_lon)
+
+    center_lat = math.degrees(lat_rad - y/(r*2))
+    center_lon = math.degrees(2/(math.cos(lat_rad))*math.sin(x/(4*r))+lon_rad)
+
+    SE_lat = math.degrees(lat_rad - y/(r))
+    SE_lon = math.degrees(2/(math.cos(lat_rad))*math.sin(x/(2*r))+lon_rad)
+    
+    return ((center_lat, center_lon), (NW_lat, NW_lon), (NW_lat, SE_lon), (SE_lat, NW_lon), (SE_lat, SE_lon))
+
+
+def XML_getResolution(path, isDEM=False):
+    tree = ET.parse(path)
+    root = tree.getroot()
+    
+    if isDEM:    
+        for el in root.iter():
+            res_el = el.findall("keywords/theme/grouping/themekey")
+            if len(res_el):
+                res = float(res_el[1].text)   
+    
+    else:
+         for el in root.iter():
+            res_el = el.find("{http://www.isotc211.org/2005/gmd}resolution/{http://www.isotc211.org/2005/gco}Length")
+            if res_el != None:
+                    res = float(res_el.text)
+    
+    assert res != None, "Couldn't parse resolution in XML file."
+
+    return res
+
+
+def XML_getCoordinates(path):
+
+    tree = ET.parse(path)
+    root = tree.getroot()
+
+    W = E = S = N = None
+
+    for el in root.iter():
+
+        W_el = el.find("{http://www.isotc211.org/2005/gmd}westBoundLongitude/{http://www.isotc211.org/2005/gco}Decimal")
+        E_el = el.find("{http://www.isotc211.org/2005/gmd}eastBoundLongitude/{http://www.isotc211.org/2005/gco}Decimal")
+        S_el = el.find("{http://www.isotc211.org/2005/gmd}southBoundLatitude/{http://www.isotc211.org/2005/gco}Decimal") 
+        N_el = el.find("{http://www.isotc211.org/2005/gmd}northBoundLatitude/{http://www.isotc211.org/2005/gco}Decimal")
+
+        if W_el != None:
+                W = float(W_el.text)
+
+        if E_el != None:
+                E = float(E_el.text)
+                
+        if S_el != None:
+                S = float(S_el.text)
+
+        if N_el != None:
+                N = float(N_el.text)
+    
+    assert W != None or E != None or S != None or N != None  , "Couldn't parse coordinates in XML file."
+
+    C = [np.mean([N, S]), np.mean([W, E])]
+
+    return (C, [N, W], [N, E], [S, W], [S, E])
 
 
 def haversine_distance(coo1, coo2):
@@ -24,6 +95,7 @@ def haversine_distance(coo1, coo2):
     distance = R * c
     
     return distance
+
 
 #interpolo per reimpire i dati mancanti
 def fill_nan(data):
@@ -56,8 +128,8 @@ def fill_nan(data):
 def resample(img1, img2, res1, res2, thresh): 
 
     if(res2<thresh):
-        res3 = thresh
-        img2, _ = resample(img2, np.nan, res2, res3, thresh) #se res di img troppo piccola (<thresh m/px), resample a 10 m/px
+        res3 = res_thresh
+        img2, _ = resample(img2, np.nan, res2, res3, thresh) #se res di img troppo piccola (<res_thresh m/px), resample a 10 m/px
         res2 = res3
     
     fac = res2/res1
@@ -67,12 +139,11 @@ def resample(img1, img2, res1, res2, thresh):
     return (cv.resize(img1, dsize=[u, v], fx=fac, fy=fac, interpolation=cv.INTER_LINEAR), img2)
 
 #croppo il dem alle dimensioni dell'immagine
-def crop(zos, img, demcoo, imgcoo, imgres):
+def crop(zos, img, demcoo, imgcoo, res):
 
     #calcolo distanza in x, y in metri
-
-    EW_dst = haversine_distance(dem_coo, (demcoo[0], imgcoo[1]))*1000
-    NS_dst = haversine_distance(dem_coo, (imgcoo[0], demcoo[1]))*1000
+    EW_dst = haversine_distance(demcoo, (demcoo[0], imgcoo[1]))*1000
+    NS_dst = haversine_distance(demcoo, (imgcoo[0], demcoo[1]))*1000
 
     #calcolo la distanza in pixel dei centri
     if EW_dst-np.floor(EW_dst) < 0.5:
@@ -85,10 +156,10 @@ def crop(zos, img, demcoo, imgcoo, imgres):
     else:
         NS_dst = np.ceil(NS_dst)
 
-    
-    x_dst = int(EW_dst/imgres)
-    y_dst = int(NS_dst/imgres)
+    x_dst = int(EW_dst/res)
+    y_dst = int(NS_dst/res)
 
+    # definizione della finestra da croppare
     u0 = zos.shape[1]//2 + x_dst - (img.shape[1]//2)
     u1 = zos.shape[1]//2 + x_dst + (img.shape[1]//2)
 
@@ -107,51 +178,42 @@ def desquare(zhole, DEMcorners, demres):
     return cv.resize(zhole, [u, v])
 
 
-# dem_path = "data/n32_e103_1arc_v3.tif"
-# img_path = "data/land_texture.jpg"
+dem_path = "C:/Users/giovi/Dropbox (Politecnico Di Torino Studenti)/Polito/Primo anno/Secondo semestre_/Image processing and computer vision/Progetto/DEM_visualization/DEM_visualization/data/n43_w111_1arc_v3.tif"
+img_path = "C:/Users/giovi/Dropbox (Politecnico Di Torino Studenti)/Polito/Primo anno/Secondo semestre_/Image processing and computer vision/Progetto/DEM_visualization/DEM_visualization/data/land_textureT.tif"
+xml_img_path = "C:/Users/giovi/Dropbox (Politecnico Di Torino Studenti)/Polito/Primo anno/Secondo semestre_/Image processing and computer vision/Progetto/DEM_visualization/DEM_visualization/data/m_4311037_ne_12_060_20220719.xml"
+xml_dem_path = "C:/Users/giovi/Dropbox (Politecnico Di Torino Studenti)/Polito/Primo anno/Secondo semestre_/Image processing and computer vision/Progetto/DEM_visualization/DEM_visualization/data/srtm_v3_SRTM1N43W111V3.xml"
 
-# dem_res = 30
-# img_res = 10
-# thresh = 5
+dem_res = 30 #XML_getResolution(xml_dem_path, isDEM=True) se si trovasse un XML decente
+img_res = XML_getResolution(xml_img_path)
+res_thresh = 5  # soglia di risoluzione massima: se sotto la soglia, le immagini verranno ricampionate al valore di soglia (espressa in metri/pixel)
 
-# dem_coo = (32.5, 103.5)
-# img_coo = (32.340540, 103.539226)
+img_coo = XML_getCoordinates(xml_img_path)
 
-# DEM_corners = ([33, 103], #NW
-#                [33, 104], #NE
-#                [32, 103], #SW
-#                [32, 104]) #SE
-
-dem_path = "data/n43_w111_1arc_v3.tif"
-img_path = "data/land_textureT.tif"
-
-dem_res = 30
-img_res = 0.6
-thresh = 5
-
-dem_coo = (43.5 , -110.5)
-img_coo = (43.4690027 , -110.4059861)
-
+# le coordinate degli angoli dell'immagine potrebbero essere ricavate automaticamente attraverso la funzione coordinates(...) se il rapporto d'aspetto del DEM fosse quello corretto
 DEM_corners = ([44, -111], #NW
                [44, -110], #NE
                [43, -111], #SW
                [43, -110]) #SE
 
+dem = tif.TiffReader(dem_path)
 z_raw = cv.imread(dem_path, cv.IMREAD_UNCHANGED)
-img = cv.cvtColor(cv.imread(img_path), cv.COLOR_BGR2RGB)
+img = cv.cvtColor(cv.imread(img_path, cv.IMREAD_UNCHANGED), cv.COLOR_BGR2RGB)
 
-z_hole = np.where(z_raw<0.5, np.nan, z_raw)
+z_hole = np.where(z_raw<0.5, np.nan, z_raw) # elimino dati assenti
 
-z_dsq = desquare(z_hole, DEM_corners, dem_res)
+z_fll = fill_nan(z_hole) # interpolo dati assenti
 
-z_os, img = resample(z_dsq, img, dem_res, img_res, thresh)
+z_dsq = desquare(z_fll, DEM_corners, dem_res) # correzione del rapporto d'aspetto del DEM a partire dalle coordinate degli angoli
 
-if img_res < thresh:
-    img_res = thresh
+#la seguente chiamata a funzione potrebbe essere eseguita prima se il rapporto d'aspetto del DEM fosse quelo corretto 
+dem_coo = geotiff_getCoordinates(dem, dem_res, z_dsq.shape[1], z_dsq.shape[0]) # parsing delle coordinate di centro e angoli DEM
 
-z_crp = crop(z_os, img, dem_coo, img_coo, img_res)
+z_os, img = resample(z_dsq, img, dem_res, img_res, res_thresh) # ricampionamento di DEM e immagine (se res troppo alta (piccola))
 
-z = fill_nan(z_crp)
+if img_res < res_thresh:
+    img_res = res_thresh # aggiorno risoluzione immagine se modificata
+
+z = crop(z_os, img, dem_coo[0], img_coo[0], img_res) # crop del DEM su una finestra ampia quanto l'immagine
 
 x = img.shape[1]
 y = img.shape[0]

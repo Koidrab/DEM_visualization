@@ -1,13 +1,11 @@
 import numpy as np
 import cv2 as cv 
+import math 
 import tifffile as tif
 import xml.etree.ElementTree as ET
-import math 
 import mayavi.mlab as mlb
-from tvtk.api import tvtk
 import vtk
 from vtkmodules.util.numpy_support import numpy_to_vtk
-import matplotlib.pyplot as plt
 
 def geotiff_getCoordinates(tiff, res, x, y):
     x = x*res
@@ -97,7 +95,6 @@ def haversine_distance(coo1, coo2):
     return distance
 
 
-#interpolo per reimpire i dati mancanti
 def fill_nan(data):
     dim = data.shape
     data = np.reshape(data, (data.shape[0]*data.shape[1]))
@@ -129,7 +126,7 @@ def resample(img1, img2, res1, res2, thresh):
 
     if(res2<thresh):
         res3 = res_thresh
-        img2, _ = resample(img2, np.nan, res2, res3, thresh) #se res di img troppo piccola (<res_thresh m/px), resample a 10 m/px
+        img2, _ = resample(img2, np.nan, res2, res3, thresh)
         res2 = res3
     
     fac = res2/res1
@@ -138,14 +135,12 @@ def resample(img1, img2, res1, res2, thresh):
 
     return (cv.resize(img1, dsize=[u, v], fx=fac, fy=fac, interpolation=cv.INTER_LINEAR), img2)
 
-#croppo il dem alle dimensioni dell'immagine
+
 def crop(zos, img, demcoo, imgcoo, res):
 
-    #calcolo distanza in x, y in metri
     EW_dst = haversine_distance(demcoo, (demcoo[0], imgcoo[1]))*1000
     NS_dst = haversine_distance(demcoo, (imgcoo[0], demcoo[1]))*1000
 
-    #calcolo la distanza in pixel dei centri
     if EW_dst-np.floor(EW_dst) < 0.5:
         EW_dst = np.floor(EW_dst)
     else:
@@ -159,7 +154,6 @@ def crop(zos, img, demcoo, imgcoo, res):
     x_dst = int(EW_dst/res)
     y_dst = int(NS_dst/res)
 
-    # definizione della finestra da croppare
     u0 = zos.shape[1]//2 + x_dst - (img.shape[1]//2)
     u1 = zos.shape[1]//2 + x_dst + (img.shape[1]//2)
 
@@ -177,19 +171,20 @@ def desquare(zhole, DEMcorners, demres):
 
     return cv.resize(zhole, [u, v])
 
-# EDIT THIS TO USE YOUR OWN DATA 
-dem_path = "your dem path"
-img_path = "your image path"
-xml_img_path = "your xml path of the image metadata"
-xml_dem_path = "your xml path of the dem metadata"
 
-dem_res = 30 #XML_getResolution(xml_dem_path, isDEM=True) se si trovasse un XML decente
+# EDIT THIS TO USE THE CODE WITH YOUR OWN DATA 
+dem_path = "path of dem in gdal/geotiff format"
+img_path = "path of the image"
+xml_dem_path = "path of xml file of the dem metadata"
+xml_img_path = "path of xml file of the image metadata"
+
+dem_res = 30 #XML_getResolution(xml_dem_path, isDEM=True) 
 img_res = XML_getResolution(xml_img_path)
-res_thresh = 5  # soglia di risoluzione massima: se sotto la soglia, le immagini verranno ricampionate al valore di soglia (espressa in metri/pixel)
+res_thresh = 5  # soglia di risoluzione massima: se sotto la soglia, l'immagine verrà ricampionata al valore di soglia (espressa in metri/pixel)
 
 img_coo = XML_getCoordinates(xml_img_path)
 
-# le coordinate degli angoli dell'immagine potrebbero essere ricavate automaticamente attraverso la funzione coordinates(...) se il rapporto d'aspetto del DEM fosse quello corretto
+''' le coordinate degli angoli dell'immagine potrebbero essere ricavate automaticamente attraverso la funzione geotiff_getCoordinates(...) se il rapporto d'aspetto del DEM fosse quello corretto '''
 DEM_corners = ([44, -111], #NW
                [44, -110], #NE
                [43, -111], #SW
@@ -199,15 +194,19 @@ dem = tif.TiffReader(dem_path)
 z_raw = cv.imread(dem_path, cv.IMREAD_UNCHANGED)
 img = cv.cvtColor(cv.imread(img_path, cv.IMREAD_UNCHANGED), cv.COLOR_BGR2RGB)
 
-z_hole = np.where(z_raw<0.5, np.nan, z_raw) # elimino dati assenti
+# PIPELINE
 
-z_fll = fill_nan(z_hole) # interpolo dati assenti
+# Data cleaning
+z_hole = np.where(z_raw<0.5, np.nan, z_raw)
 
-z_dsq = desquare(z_fll, DEM_corners, dem_res) # correzione del rapporto d'aspetto del DEM a partire dalle coordinate degli angoli
+z_fll = fill_nan(z_hole)
 
-#la seguente chiamata a funzione potrebbe essere eseguita prima se il rapporto d'aspetto del DEM fosse quelo corretto 
+z_dsq = desquare(z_fll, DEM_corners, dem_res)
+
+''' la seguente chiamata a funzione potrebbe essere inserita a riga 192 se il rapporto d'aspetto del DEM fosse quello corretto '''
 dem_coo = geotiff_getCoordinates(dem, dem_res, z_dsq.shape[1], z_dsq.shape[0]) # parsing delle coordinate di centro e angoli DEM
 
+# Resampling
 z_os, img = resample(z_dsq, img, dem_res, img_res, res_thresh) # ricampionamento di DEM e immagine (se res troppo alta (piccola))
 
 if img_res < res_thresh:
@@ -218,26 +217,21 @@ z = crop(z_os, img, dem_coo[0], img_coo[0], img_res) # crop del DEM su una fines
 x = img.shape[1]
 y = img.shape[0]
 
-print(dem_coo)
-
 # PLOTTING
-grid = vtk.vtkImageData()
-grid.SetDimensions(y, x, 1)
 
 tex = np.reshape(img, (x*y, 3), order="F")
 
+grid = vtk.vtkImageData()
+grid.SetDimensions(y, x, 1)
 vtkarr = numpy_to_vtk(tex)
 vtkarr.SetName('Image')
-
 grid.GetPointData().AddArray(vtkarr)
 grid.GetPointData().SetActiveScalars('Image')
-
 vtex = vtk.vtkTexture()
 vtex.SetInputDataObject(grid)
 vtex.Update()
 
 surf = mlb.surf(x, y, z, warp_scale=1/img_res)
-
 surf.actor.mapper.interpolate_scalars_before_mapping = False
 surf.actor.actor.mapper.scalar_visibility = 0
 surf.actor.enable_texture = True

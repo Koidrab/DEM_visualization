@@ -177,11 +177,11 @@ def desquare(zhole, DEMcorners, demres):
 
     return cv.resize(zhole, [u, v])
 
-
-dem_path = "C:/Users/giovi/Dropbox (Politecnico Di Torino Studenti)/Polito/Primo anno/Secondo semestre_/Image processing and computer vision/Progetto/DEM_visualization/DEM_visualization/data/n43_w111_1arc_v3.tif"
-img_path = "C:/Users/giovi/Dropbox (Politecnico Di Torino Studenti)/Polito/Primo anno/Secondo semestre_/Image processing and computer vision/Progetto/DEM_visualization/DEM_visualization/data/land_textureT.tif"
-xml_img_path = "C:/Users/giovi/Dropbox (Politecnico Di Torino Studenti)/Polito/Primo anno/Secondo semestre_/Image processing and computer vision/Progetto/DEM_visualization/DEM_visualization/data/m_4311037_ne_12_060_20220719.xml"
-xml_dem_path = "C:/Users/giovi/Dropbox (Politecnico Di Torino Studenti)/Polito/Primo anno/Secondo semestre_/Image processing and computer vision/Progetto/DEM_visualization/DEM_visualization/data/srtm_v3_SRTM1N43W111V3.xml"
+# EDIT THIS TO USE YOUR OWN DATA 
+dem_path = "your dem path"
+img_path = "your image path"
+xml_img_path = "your xml path of the image metadata"
+xml_dem_path = "your xml path of the dem metadata"
 
 dem_res = 30 #XML_getResolution(xml_dem_path, isDEM=True) se si trovasse un XML decente
 img_res = XML_getResolution(xml_img_path)
@@ -217,6 +217,8 @@ z = crop(z_os, img, dem_coo[0], img_coo[0], img_res) # crop del DEM su una fines
 
 x = img.shape[1]
 y = img.shape[0]
+
+print(dem_coo)
 
 # PLOTTING
 grid = vtk.vtkImageData()

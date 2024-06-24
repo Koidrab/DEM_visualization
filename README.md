@@ -1,4 +1,4 @@
-This project was done for [Argotec](https://www.argotecgroup.com/).
+*This project was done for and in collaboration with [Argotec](https://www.argotecgroup.com/)*
 # 3D DEM Visualization for geolocalized satellite images
 The proposed solution is an algorithm that is able to recreate a 3D representation of a terrain, given an orthorectified image and the Digital Elevation Model (DEM) that contains it. The general workflow idea for the algorithm was to create the 3D model directly from the DEM and than applying the image just as a texture.  It has been done in Python.
 
